@@ -45,3 +45,30 @@ def tokens_per_watt(total_tokens: int, wh: float, seconds: float = 1.0) -> float
     """Energy efficiency of serving: tokens per watt (higher is better)."""
     watts = (wh * 3600.0) / seconds if seconds > 0 else 0.0
     return total_tokens / watts if watts > 0 else 0.0
+
+
+def compare_all_regions(total_kwh: float) -> list[dict]:
+    """Compare power cost and carbon footprint across all 5 regions.
+
+    Returns rows with:
+      - region
+      - price_per_kwh ($)
+      - carbon_intensity (gCO2/kWh)
+      - electricity_cost_usd ($)
+      - carbon_kg (kg CO2e)
+    """
+    rows = []
+    for reg in sorted(REGION_CARBON.keys()):
+        c_intensity = REGION_CARBON[reg]
+        price = REGION_PRICE_KWH[reg]
+        cost = total_kwh * price
+        carbon_kg = (total_kwh * c_intensity) / 1000.0
+        rows.append({
+            "region": reg,
+            "price_per_kwh": price,
+            "carbon_g_per_kwh": c_intensity,
+            "electricity_cost_usd": round(cost, 2),
+            "carbon_kg": round(carbon_kg, 2),
+        })
+    return rows
+

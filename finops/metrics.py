@@ -61,3 +61,62 @@ def flag_util_lies(rows, util_threshold: float = 0.90, mfu_threshold: float = 0.
 def idle_waste_usd(idle_hours: float, on_demand_hr: float) -> float:
     """Dollars burned by a GPU left running idle (training done, instance up)."""
     return max(0.0, idle_hours) * max(0.0, on_demand_hr)
+
+
+def dollars_per_gb_vram(on_demand_hr: float, hbm_gb: float) -> float:
+    """Calculate the $/GB-VRAM-hr metric to evaluate memory cost efficiency.
+
+    For memory-bound LLM decode workloads, cost is dominated by VRAM footprint
+    and bandwidth, not raw FP16 FLOPs.
+    """
+    if hbm_gb <= 0:
+        return 0.0
+    return on_demand_hr / hbm_gb
+
+
+def mbu_rightsize_analysis(gpu_summary: list[dict], catalog: dict) -> list[dict]:
+    """Identify memory-bound GPUs with underutilized bandwidth and recommend cost-effective replacements.
+
+    Compares $/GB-VRAM, required bandwidth (achieved_bw_tbs), and recommends right-sized GPUs.
+    """
+    recommendations = []
+    for g in gpu_summary:
+        cur_type = g["gpu_type"]
+        cur_cat = catalog.get(cur_type, {})
+        cur_od = float(cur_cat.get("on_demand_hr", 0))
+        cur_bw = float(cur_cat.get("peak_bw_tbs", 1.0))
+        cur_vram = float(cur_cat.get("hbm_gb", 1.0))
+        mbu = g.get("mbu", 0.0)
+        achieved_bw = mbu * cur_bw
+
+        # If MBU is low (< 0.35) and hourly price is high (>= $1.50)
+        if mbu < 0.35 and cur_od >= 1.50:
+            best_alt = None
+            best_savings = 0.0
+            for alt_type, alt_cat in catalog.items():
+                alt_od = float(alt_cat.get("on_demand_hr", 0))
+                alt_bw = float(alt_cat.get("peak_bw_tbs", 0))
+                alt_vram = float(alt_cat.get("hbm_gb", 0))
+                # Must satisfy achieved bandwidth requirement and have sufficient VRAM
+                if alt_od < cur_od and alt_bw >= achieved_bw and alt_vram >= min(cur_vram * 0.5, 24):
+                    savings_hr = cur_od - alt_od
+                    if savings_hr > best_savings:
+                        best_savings = savings_hr
+                        best_alt = {
+                            "current_gpu": g["gpu_id"],
+                            "current_type": cur_type,
+                            "current_od_hr": cur_od,
+                            "current_mbu": mbu,
+                            "achieved_bw_tbs": round(achieved_bw, 3),
+                            "recommended_type": alt_type,
+                            "recommended_od_hr": alt_od,
+                            "recommended_bw_tbs": alt_bw,
+                            "savings_hr": round(savings_hr, 2),
+                            "savings_pct": round((savings_hr / cur_od) * 100, 1),
+                            "monthly_savings": round(savings_hr * 24 * 30, 2),
+                            "reason": f"Achieved BW ({achieved_bw:.2f} TB/s) fits on {alt_type} ({alt_bw:.2f} TB/s peak) while cutting hourly rate from ${cur_od} to ${alt_od}",
+                        }
+            if best_alt:
+                recommendations.append(best_alt)
+    return recommendations
+

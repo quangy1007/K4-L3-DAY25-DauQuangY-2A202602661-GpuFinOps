@@ -46,6 +46,10 @@ def run(verbose: bool = True) -> dict:
         on_demand = num(catalog_by_type()[s["gpu_type"]]["on_demand_hr"])
         idle_waste += metrics.idle_waste_usd(s["idle_hours"], on_demand)
 
+    # Extension 2: MBU-based Right-sizing analysis
+    rightsize_recs = metrics.mbu_rightsize_analysis(summary, cat)
+    total_rightsize_savings = sum(r["monthly_savings"] for r in rightsize_recs)
+
     if verbose:
         print("== M1 Efficiency Audit ==")
         print(f"{'GPU':14}{'type':7}{'util%':>7}{'MFU':>7}{'MBU':>7}{'idle_h':>8}")
@@ -54,8 +58,31 @@ def run(verbose: bool = True) -> dict:
         print(f"\nGPU-Util LIES (util>=90% but MFU<30%): {[l['gpu_id'] for l in lies]}")
         print(f"Idle waste (1 day): ${idle_waste:,.2f}  ->  ${idle_waste*30:,.0f}/month")
 
-    return {"summary": summary, "lies": lies, "idle_waste_daily": round(idle_waste, 2)}
+        print("\n== Extension 2: Right-sizing theo MBU & $/GB-VRAM ==")
+        print(f"{'GPU type':10}{'on-demand':>12}{'hbm_gb':>9}{'peak_bw_tbs':>14}{'$/GB-VRAM-hr':>15}")
+        for gt, row in cat.items():
+            od = num(row['on_demand_hr'])
+            vram = num(row['hbm_gb'])
+            bw = num(row['peak_bw_tbs'])
+            cost_vram = metrics.dollars_per_gb_vram(od, vram)
+            print(f"{gt:10}${od:>11.2f}{vram:>9.0f}{bw:>14.2f}${cost_vram:>14.4f}")
+
+        if rightsize_recs:
+            print("\nRight-sizing Recommendations for Memory-Bound GPUs:")
+            for r in rightsize_recs:
+                print(f"  * {r['current_gpu']} ({r['current_type']}, MBU={r['current_mbu']:.3f}) -> Replace with {r['recommended_type']}: Save ${r['savings_hr']}/hr (${r['monthly_savings']:,.0f}/mo, -{r['savings_pct']}%)")
+                print(f"    Reason: {r['reason']}")
+            print(f"  => Total Monthly Right-sizing Potential: ${total_rightsize_savings:,.2f}/month")
+
+    return {
+        "summary": summary,
+        "lies": lies,
+        "idle_waste_daily": round(idle_waste, 2),
+        "rightsize_recommendations": rightsize_recs,
+        "rightsize_monthly_savings": round(total_rightsize_savings, 2),
+    }
 
 
 if __name__ == "__main__":
     run()
+
